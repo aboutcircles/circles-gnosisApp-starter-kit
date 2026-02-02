@@ -213,25 +213,83 @@ function eventMatchesData(dataField: string, dataValue: string): boolean {
   return false;
 }
 
+function parseNumericString(value: string): bigint {
+  const trimmed = value.trim();
+  if (!trimmed) return 0n;
+  try {
+    if (trimmed.startsWith("0x")) {
+      return BigInt(trimmed);
+    }
+    return BigInt(trimmed);
+  } catch {
+    return 0n;
+  }
+}
+
+function compareEventsByRecency(a: CirclesTransferEvent, b: CirclesTransferEvent): number {
+  const blockDelta = parseNumericString(a.blockNumber) - parseNumericString(b.blockNumber);
+  if (blockDelta !== 0n) return blockDelta > 0n ? 1 : -1;
+
+  const txDelta =
+    parseNumericString(a.transactionIndex) - parseNumericString(b.transactionIndex);
+  if (txDelta !== 0n) return txDelta > 0n ? 1 : -1;
+
+  const logDelta = parseNumericString(a.logIndex) - parseNumericString(b.logIndex);
+  if (logDelta !== 0n) return logDelta > 0n ? 1 : -1;
+
+  const tsDelta = parseNumericString(a.timestamp) - parseNumericString(b.timestamp);
+  if (tsDelta !== 0n) return tsDelta > 0n ? 1 : -1;
+
+  return a.transactionHash.localeCompare(b.transactionHash);
+}
+
+export function isTransferEventMatch(
+  event: CirclesTransferEvent,
+  dataValue: string,
+  recipientAddress?: string | null
+): boolean {
+  const normalizedRecipient = normalizeAddress(recipientAddress ?? "");
+  if (normalizedRecipient && !addressesMatch(event.to, normalizedRecipient)) {
+    return false;
+  }
+  if (!event.data) return false;
+  return eventMatchesData(event.data, dataValue);
+}
+
+export function selectLatestMatchingTransferEvent(
+  events: CirclesTransferEvent[],
+  dataValue: string,
+  recipientAddress?: string | null
+): CirclesTransferEvent | null {
+  let latest: CirclesTransferEvent | null = null;
+
+  for (const event of events) {
+    if (!isTransferEventMatch(event, dataValue, recipientAddress)) {
+      continue;
+    }
+    if (!latest || compareEventsByRecency(event, latest) > 0) {
+      latest = event;
+    }
+  }
+
+  return latest;
+}
+
+export async function fetchLatestMatchingTransferEvent(
+  dataValue: string,
+  recipientAddress?: string | null,
+  limit: number = 200
+): Promise<CirclesTransferEvent | null> {
+  if (!dataValue) return null;
+  const events = await fetchTransferDataEvents(limit, recipientAddress);
+  return selectLatestMatchingTransferEvent(events, dataValue, recipientAddress);
+}
+
 export async function checkPaymentReceived(
   dataValue: string,
   minAmountCRC: number,
   recipientAddress?: string | null
 ): Promise<CirclesTransferEvent | null> {
   if (!dataValue || minAmountCRC <= 0) return null;
-
-  const normalizedRecipient = normalizeAddress(recipientAddress ?? "");
-  const events = await fetchTransferDataEvents(200, normalizedRecipient);
-
-  for (const event of events) {
-    if (!event.data) continue;
-    if (normalizedRecipient && !addressesMatch(event.to, normalizedRecipient)) {
-      continue;
-    }
-    if (eventMatchesData(event.data, dataValue)) {
-      return event;
-    }
-  }
-
-  return null;
+  return fetchLatestMatchingTransferEvent(dataValue, recipientAddress, 200);
 }
