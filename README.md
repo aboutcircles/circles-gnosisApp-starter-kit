@@ -30,3 +30,7 @@ npm run dev
 - `src/hooks/use-payment-watcher.ts` for polling cadence
 - `src/components/ui/*` for shadcn-style primitives
 - `src/app/page.tsx` for the main flow
+
+## Included example game
+
+- `/king-of-the-hill`: latest valid payment takes the crown until the round timer ends

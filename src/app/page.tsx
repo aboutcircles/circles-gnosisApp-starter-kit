@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowUpRight, Clipboard, QrCode } from "lucide-react";
+import { ArrowUpRight, Clipboard, Crown, QrCode } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -110,6 +110,13 @@ export default function Home() {
               <p className="text-xs uppercase tracking-[0.4em] text-ink/60"> Starter Kit</p>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-ink/60">
+              <Link
+                href="/king-of-the-hill"
+                className="inline-flex items-center gap-1 rounded-full border border-citrus/30 bg-citrus/10 px-3 py-1 text-citrus transition hover:border-citrus/40 hover:bg-citrus/15"
+              >
+                <Crown className="h-3.5 w-3.5" />
+                King of the Hill
+              </Link>
               <Link
                 href="/behind-the-scenes"
                 className="rounded-full border border-ink/10 bg-white/70 px-3 py-1 transition hover:border-ink/20 hover:text-ink"
