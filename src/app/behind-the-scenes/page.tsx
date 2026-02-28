@@ -2,7 +2,6 @@ import Link from "next/link";
 import { ArrowLeft, Link2, QrCode, Radar, ShieldCheck } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { circlesConfig } from "@/lib/circles";
 
 export const metadata = {
   title: "Behind the Scenes | Circles × Gnosis App Starter Kit",

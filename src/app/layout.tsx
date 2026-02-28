@@ -13,8 +13,9 @@ const body = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "Circles × Gnosis App Starter Kit",
-  description: "A mobile-first starter kit for Circles payments in the Gnosis app."
+  title: "Circles Solo Coin Flip",
+  description:
+    "A one-player QR-first game with automated 2 CRC winner payouts."
 };
 
 export default function RootLayout({
@@ -24,9 +25,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${display.variable} ${body.variable}`}>
-      <body className="min-h-screen">
-        {children}
-      </body>
+      <body className="min-h-screen">{children}</body>
     </html>
   );
 }

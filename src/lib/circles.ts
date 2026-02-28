@@ -1,4 +1,5 @@
-const DEFAULT_CIRCLES_RPC_URL = "https://staging.circlesubi.network/";
+const DEFAULT_CIRCLES_RPC_URL = "https://rpc.aboutcircles.com/";
+const DEFAULT_CIRCLES_EVENTS_RPC_URL = "https://staging.circlesubi.network/";
 const DEFAULT_RECIPIENT_ADDRESS = "0x7B8a5a4673fcd082b742304032eA49D6bC6e01f5";
 
 export type CirclesTransferEvent = {
@@ -13,7 +14,16 @@ export type CirclesTransferEvent = {
 };
 
 export const circlesConfig = {
-  rpcUrl: process.env.NEXT_PUBLIC_CIRCLES_RPC_URL || DEFAULT_CIRCLES_RPC_URL,
+  rpcUrl:
+    process.env.CIRCLES_RPC_URL ||
+    process.env.NEXT_PUBLIC_CIRCLES_RPC_URL ||
+    DEFAULT_CIRCLES_RPC_URL,
+  eventsRpcUrl:
+    process.env.CIRCLES_EVENTS_RPC_URL ||
+    process.env.NEXT_PUBLIC_CIRCLES_EVENTS_RPC_URL ||
+    process.env.CIRCLES_RPC_URL ||
+    process.env.NEXT_PUBLIC_CIRCLES_RPC_URL ||
+    DEFAULT_CIRCLES_EVENTS_RPC_URL,
   defaultRecipientAddress:
     process.env.NEXT_PUBLIC_DEFAULT_RECIPIENT_ADDRESS ||
     process.env.NEXT_PUBLIC_GATEWAY_ADDRESS ||
@@ -36,7 +46,8 @@ interface QueryOptions {
 
 type TransferDataEventPayload = {
   event: string;
-  values: Record<string, unknown>;
+  values?: Record<string, unknown>;
+  [key: string]: unknown;
 };
 
 type TransferDataQueryResult = {
@@ -45,18 +56,27 @@ type TransferDataQueryResult = {
   nextCursor?: string | null;
 };
 
+function pickValue(values: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (values[key] !== undefined && values[key] !== null) {
+      return values[key];
+    }
+  }
+  return "";
+}
+
 function mapTransferEvents(events: TransferDataEventPayload[] = []): CirclesTransferEvent[] {
   return events.map((item) => {
-    const values = item.values ?? {};
+    const values = (item.values ?? item) as Record<string, unknown>;
     return {
-      transactionHash: String(values.transactionHash ?? ""),
-      from: String(values.from ?? ""),
-      to: String(values.to ?? ""),
-      data: String(values.data ?? ""),
-      blockNumber: String(values.blockNumber ?? ""),
-      timestamp: String(values.timestamp ?? ""),
-      transactionIndex: String(values.transactionIndex ?? ""),
-      logIndex: String(values.logIndex ?? "")
+      transactionHash: String(pickValue(values, "transactionHash", "TransactionHash")),
+      from: String(pickValue(values, "from", "From")),
+      to: String(pickValue(values, "to", "To")),
+      data: String(pickValue(values, "data", "Data")),
+      blockNumber: String(pickValue(values, "blockNumber", "BlockNumber")),
+      timestamp: String(pickValue(values, "timestamp", "Timestamp")),
+      transactionIndex: String(pickValue(values, "transactionIndex", "TransactionIndex")),
+      logIndex: String(pickValue(values, "logIndex", "LogIndex"))
     };
   });
 }
@@ -72,7 +92,7 @@ async function circlesEventsQuery(
     params: [recipientAddress ?? options.cursor ?? null, null, null, ["CrcV2_TransferData"]]
   };
 
-  const response = await fetch(circlesConfig.rpcUrl, {
+  const response = await fetch(circlesConfig.eventsRpcUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -89,11 +109,21 @@ async function circlesEventsQuery(
     throw new Error(payload.error.message || "circles_events returned an error");
   }
 
-  const result = (payload.result || {}) as TransferDataQueryResult;
+  const result = payload.result as TransferDataQueryResult | TransferDataEventPayload[] | undefined;
+
+  if (Array.isArray(result)) {
+    return {
+      events: mapTransferEvents(result),
+      hasMore: false,
+      nextCursor: null
+    };
+  }
+
+  const queryResult = (result || {}) as TransferDataQueryResult;
   return {
-    events: mapTransferEvents(result.events),
-    hasMore: Boolean(result.hasMore),
-    nextCursor: result.nextCursor ?? null
+    events: mapTransferEvents(queryResult.events),
+    hasMore: Boolean(queryResult.hasMore),
+    nextCursor: queryResult.nextCursor ?? null
   };
 }
 
@@ -179,7 +209,7 @@ function hexToUtf8(hexValue: string): string | null {
   }
 }
 
-function eventMatchesData(dataField: string, dataValue: string): boolean {
+export function eventMatchesData(dataField: string, dataValue: string): boolean {
   const target = normalizeString(dataValue);
   if (!target) return false;
 
