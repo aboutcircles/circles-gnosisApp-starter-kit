@@ -313,6 +313,27 @@ export async function getSoloOrgBalanceCRC(): Promise<string | null> {
   }
 }
 
+export async function getSoloOrgName(): Promise<string | null> {
+  const orgAvatarAddress = process.env.CIRCLES_ORG_AVATAR_ADDRESS?.trim();
+  if (!orgAvatarAddress || !isAddress(orgAvatarAddress)) {
+    return null;
+  }
+
+  const circlesRpcUrl =
+    process.env.CIRCLES_RPC_URL ||
+    process.env.NEXT_PUBLIC_CIRCLES_RPC_URL ||
+    DEFAULT_CHAIN_RPC_URL;
+
+  try {
+    const rpc = new CirclesRpc(circlesRpcUrl);
+    const profile = await rpc.profile.getProfileByAddress(orgAvatarAddress as Address);
+    const name = String(profile?.name ?? "").trim();
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function payoutSoloWinner(params: {
   roundId: string;
   winnerAddress: string;

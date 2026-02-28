@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   getSoloEconomics,
   getSoloOrgBalanceCRC,
+  getSoloOrgName,
   getSoloPayoutConfiguration
 } from "@/lib/server/solo-payout";
 import {
@@ -43,10 +44,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ round });
     }
 
-    const [rounds, payoutConfig, orgBalanceCRC] = await Promise.all([
+    const [rounds, payoutConfig, orgBalanceCRC, orgName] = await Promise.all([
       listSoloRoundsWithLifecycle(40),
       Promise.resolve(getSoloPayoutConfiguration()),
-      getSoloOrgBalanceCRC()
+      getSoloOrgBalanceCRC(),
+      getSoloOrgName()
     ]);
 
     const economics = getSoloEconomics();
@@ -56,6 +58,7 @@ export async function GET(request: Request) {
       config: {
         payout: {
           ...payoutConfig,
+          orgName,
           orgBalanceCRC,
           entryFeeCRC: economics.entryFeeCRC,
           winnerPayoutCRC: economics.winnerPayoutCRC,

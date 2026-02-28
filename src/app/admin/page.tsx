@@ -26,6 +26,7 @@ interface SoloRoundsResponse {
   config: {
     payout: {
       orgAvatarAddress?: string;
+      orgName?: string | null;
       orgBalanceCRC?: string | null;
       entryRecipientAddress?: string;
       isConfigured: boolean;
@@ -69,6 +70,7 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [orgAddress, setOrgAddress] = useState("");
+  const [orgName, setOrgName] = useState<string | null>(null);
   const [orgBalanceCRC, setOrgBalanceCRC] = useState<string | null>(null);
   const [entryRecipientAddress, setEntryRecipientAddress] = useState("");
   const [entryFeeCRC, setEntryFeeCRC] = useState("1");
@@ -85,6 +87,7 @@ export default function AdminPage() {
 
     setRounds(payload.rounds ?? []);
     setOrgAddress(payload.config?.payout?.orgAvatarAddress ?? "");
+    setOrgName(payload.config?.payout?.orgName ?? null);
     setOrgBalanceCRC(payload.config?.payout?.orgBalanceCRC ?? null);
     setEntryRecipientAddress(payload.config?.payout?.entryRecipientAddress ?? "");
     setEntryFeeCRC(payload.config?.payout?.entryFeeCRC ?? "1");
@@ -168,6 +171,10 @@ export default function AdminPage() {
               <span className="font-mono">{shortAddress(entryRecipientAddress)}</span>
             </div>
             <div className="flex items-center justify-between gap-2">
+              <span>Org name</span>
+              <span className="font-mono">{orgName ?? "-"}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
               <span>Payout source</span>
               <span className="font-mono">{shortAddress(orgAddress)}</span>
             </div>
@@ -189,10 +196,15 @@ export default function AdminPage() {
         <div className="grid gap-4 md:grid-cols-5">
           <Card className="border-marine/20 bg-gradient-to-br from-marine/10 to-white md:col-span-5">
             <CardHeader>
-              <CardDescription>Org Balance</CardDescription>
-              <CardTitle className="font-display text-4xl tracking-tight text-ink md:text-5xl">
-                {orgBalanceCRC ?? "-"} <span className="text-xl font-medium text-ink/70">CRC</span>
-              </CardTitle>
+              <CardDescription>Org Overview</CardDescription>
+              <div className="flex flex-wrap items-baseline gap-4">
+                <CardTitle className="font-display text-4xl tracking-tight text-ink md:text-5xl">
+                  {orgName ?? shortAddress(orgAddress)}
+                </CardTitle>
+                <CardTitle className="font-display text-4xl tracking-tight text-ink md:text-5xl">
+                  {orgBalanceCRC ?? "-"} <span className="text-ink/70">CRC</span>
+                </CardTitle>
+              </div>
               <p className="text-xs text-ink/60">Source avatar: {shortAddress(orgAddress)}</p>
             </CardHeader>
           </Card>
