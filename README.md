@@ -121,7 +121,14 @@ create table if not exists public.solo_rounds (
   updated_at timestamptz not null,
   round jsonb not null
 );
+
+create unique index if not exists solo_rounds_one_active_per_player_idx
+  on public.solo_rounds ((lower(round->>'playerAddress')))
+  where (round->>'status') <> 'completed';
 ```
+
+The unique partial index is important: it enforces at most one active (non-completed)
+round per player even under concurrent API requests across multiple Vercel instances.
 
 5. Start dev server
 

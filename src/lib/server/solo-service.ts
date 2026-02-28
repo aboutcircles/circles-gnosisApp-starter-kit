@@ -7,8 +7,10 @@ import { formatUnits, isAddress, parseUnits, type Address } from "viem";
 import { checkPaymentReceived, eventMatchesData, generatePaymentLink } from "@/lib/circles";
 import {
   createSoloRoundRecord,
+  findActiveSoloRoundByPlayer,
   getSoloRound,
   listSoloRounds,
+  SoloStoreConflictError,
   updateSoloRound
 } from "@/lib/server/solo-store";
 import { getSoloEconomics, payoutSoloWinner } from "@/lib/server/solo-payout";
@@ -25,6 +27,36 @@ export class SoloGameError extends Error {
 
 const AMOUNT_PATTERN = /^(0|[1-9]\d*)(\.\d{1,18})?$/;
 const DEFAULT_CIRCLES_RPC_URL = "https://rpc.aboutcircles.com/";
+const createRoundLocks = new Map<string, Promise<void>>();
+
+function normalizeAddressKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+async function withPlayerCreateLock<T>(playerAddress: string, task: () => Promise<T>): Promise<T> {
+  const key = normalizeAddressKey(playerAddress);
+  const previous = createRoundLocks.get(key) ?? Promise.resolve();
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(
+    () => gate,
+    () => gate
+  );
+  createRoundLocks.set(key, tail);
+
+  await previous.catch(() => undefined);
+
+  try {
+    return await task();
+  } finally {
+    release();
+    if (createRoundLocks.get(key) === tail) {
+      createRoundLocks.delete(key);
+    }
+  }
+}
 
 function parseAmount(value: string, field: string): number {
   if (!AMOUNT_PATTERN.test(value)) {
@@ -281,60 +313,80 @@ export async function createSoloRound(params: {
     throw new SoloGameError("playerAddress is invalid", 400);
   }
 
-  const existingRounds = await listSoloRounds(200);
-  const activeRound = existingRounds.find(
-    (round) =>
-      round.status !== "completed" &&
-      round.playerAddress.toLowerCase() === params.playerAddress.toLowerCase()
-  );
+  return withPlayerCreateLock(params.playerAddress, async () => {
+    const activeRound = await findActiveSoloRoundByPlayer(params.playerAddress);
 
-  if (activeRound) {
-    throw new SoloGameError(
-      `You already have a pending round (${activeRound.id.slice(0, 8)}). Complete it before creating a new move.`,
-      409
-    );
-  }
-
-  const economics = getSoloEconomics();
-  const entryFee = parseAmount(economics.entryFeeCRC, "SOLO_ENTRY_FEE_CRC");
-  const entryFeeAtto = parseAmountToAtto(economics.entryFeeCRC, "SOLO_ENTRY_FEE_CRC");
-  const entryRecipientAddress = orgAddress;
-
-  await ensurePlayerCanPayEntryFee({
-    playerAddress: params.playerAddress as Address,
-    recipientAddress: entryRecipientAddress as Address,
-    entryFeeAtto
-  });
-
-  const roundId = randomUUID();
-  const nowIso = new Date().toISOString();
-  const expectedData = buildMoveData(roundId, params.move, params.playerAddress);
-  const paymentLink = generatePaymentLink(entryRecipientAddress, entryFee, expectedData);
-
-  const round: SoloRound = {
-    id: roundId,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-    playerAddress: params.playerAddress,
-    move: params.move,
-    status: "awaiting_payment",
-    payment: {
-      status: "pending",
-      recipientAddress: entryRecipientAddress,
-      paymentLink,
-      expectedData,
-      amountCRC: economics.entryFeeCRC
-    },
-    payout: {
-      status: "pending",
-      fromAddress: orgAddress,
-      toAddress: params.playerAddress,
-      amountCRC: economics.winnerPayoutCRC
+    if (activeRound) {
+      throw new SoloGameError(
+        `You already have a pending round (${activeRound.id.slice(0, 8)}). Complete it before creating a new move.`,
+        409
+      );
     }
-  };
 
-  await createSoloRoundRecord(round);
-  return round;
+    const economics = getSoloEconomics();
+    const entryFee = parseAmount(economics.entryFeeCRC, "SOLO_ENTRY_FEE_CRC");
+    const entryFeeAtto = parseAmountToAtto(economics.entryFeeCRC, "SOLO_ENTRY_FEE_CRC");
+    const entryRecipientAddress = orgAddress;
+
+    await ensurePlayerCanPayEntryFee({
+      playerAddress: params.playerAddress as Address,
+      recipientAddress: entryRecipientAddress as Address,
+      entryFeeAtto
+    });
+
+    const roundId = randomUUID();
+    const nowIso = new Date().toISOString();
+    const expectedData = buildMoveData(roundId, params.move, params.playerAddress);
+    const paymentLink = generatePaymentLink(entryRecipientAddress, entryFee, expectedData);
+
+    const round: SoloRound = {
+      id: roundId,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      playerAddress: params.playerAddress,
+      move: params.move,
+      status: "awaiting_payment",
+      payment: {
+        status: "pending",
+        recipientAddress: entryRecipientAddress,
+        paymentLink,
+        expectedData,
+        amountCRC: economics.entryFeeCRC
+      },
+      payout: {
+        status: "pending",
+        fromAddress: orgAddress,
+        toAddress: params.playerAddress,
+        amountCRC: economics.winnerPayoutCRC
+      }
+    };
+
+    try {
+      await createSoloRoundRecord(round);
+    } catch (error) {
+      if (error instanceof SoloStoreConflictError) {
+        const latestActiveRound = await findActiveSoloRoundByPlayer(params.playerAddress).catch(
+          () => null
+        );
+
+        if (latestActiveRound) {
+          throw new SoloGameError(
+            `You already have a pending round (${latestActiveRound.id.slice(0, 8)}). Complete it before creating a new move.`,
+            409
+          );
+        }
+
+        throw new SoloGameError(
+          "A pending round already exists for this player. Refresh and try again.",
+          409
+        );
+      }
+
+      throw error;
+    }
+
+    return round;
+  });
 }
 
 export async function processSoloRoundLifecycle(roundId: string): Promise<SoloRound | null> {

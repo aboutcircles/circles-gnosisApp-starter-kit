@@ -72,8 +72,26 @@ function payoutBadge(status: SoloRound["payout"]["status"]): BadgeVariant {
 }
 
 function upsertRound(list: SoloRound[], updated: SoloRound): SoloRound[] {
-  const merged = [updated, ...list.filter((item) => item.id !== updated.id)];
-  return merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const nextById = new Map<string, SoloRound>();
+
+  for (const round of list) {
+    nextById.set(round.id, round);
+  }
+
+  const existing = nextById.get(updated.id);
+  if (!existing || updated.updatedAt >= existing.updatedAt) {
+    nextById.set(updated.id, updated);
+  }
+
+  return Array.from(nextById.values()).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+function mergeRoundLists(current: SoloRound[], incoming: SoloRound[]): SoloRound[] {
+  let merged = current;
+  for (const round of incoming) {
+    merged = upsertRound(merged, round);
+  }
+  return merged;
 }
 
 export default function GamePage() {
@@ -108,20 +126,26 @@ export default function GamePage() {
       throw new Error(payload.error || "Failed to load rounds");
     }
 
-    setRounds(payload.rounds ?? []);
+    const incomingRounds = payload.rounds ?? [];
+    setRounds((previous) => mergeRoundLists(previous, incomingRounds));
     setEntryFeeCRC(payload.config?.payout?.entryFeeCRC ?? "1");
     setWinnerPayoutCRC(payload.config?.payout?.winnerPayoutCRC ?? "2");
     setOrgAddress(payload.config?.payout?.orgAvatarAddress ?? "");
     setEntryRecipientAddress(payload.config?.payout?.entryRecipientAddress ?? "");
 
     setSelectedRound((previous) => {
-      if (!payload.rounds?.length) {
+      if (!incomingRounds.length) {
         setSelectedRoundId(null);
         return null;
       }
 
       const preferredId = selectedRoundId ?? previous?.id;
-      const nextSelected = payload.rounds.find((item) => item.id === preferredId) ?? payload.rounds[0];
+      const nextSelected = incomingRounds.find((item) => item.id === preferredId) ?? incomingRounds[0];
+
+      if (previous?.id === nextSelected.id && previous.updatedAt > nextSelected.updatedAt) {
+        return previous;
+      }
+
       setSelectedRoundId(nextSelected.id);
       return nextSelected;
     });
@@ -135,7 +159,13 @@ export default function GamePage() {
       throw new Error(payload.error || "Failed to load round");
     }
 
-    setSelectedRound(payload.round);
+    setSelectedRound((previous) => {
+      if (!previous || previous.id !== payload.round.id) {
+        return payload.round;
+      }
+
+      return previous.updatedAt > payload.round.updatedAt ? previous : payload.round;
+    });
     setRounds((previous) => upsertRound(previous, payload.round));
     return payload.round;
   }, []);

@@ -18,8 +18,19 @@ type SoloRoundRow = {
   round: SoloRound;
 };
 
+export class SoloStoreConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SoloStoreConflictError";
+  }
+}
+
 let writeQueue = Promise.resolve();
 let supabaseClient: SupabaseClient | null = null;
+
+function normalizeAddress(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 function getSupabaseClient(): SupabaseClient | null {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -87,6 +98,18 @@ async function listLocalRounds(limit: number = 40): Promise<SoloRound[]> {
 async function getLocalRound(roundId: string): Promise<SoloRound | null> {
   const rounds = await readRounds();
   return rounds.find((round) => round.id === roundId) ?? null;
+}
+
+async function findLocalActiveRoundByPlayer(playerAddress: string): Promise<SoloRound | null> {
+  const rounds = await readRounds();
+  const target = normalizeAddress(playerAddress);
+
+  return (
+    rounds.find(
+      (round) =>
+        round.status !== "completed" && normalizeAddress(round.playerAddress) === target
+    ) ?? null
+  );
 }
 
 async function createLocalRoundRecord(round: SoloRound): Promise<void> {
@@ -175,8 +198,35 @@ export async function createSoloRoundRecord(round: SoloRound): Promise<void> {
   const { error } = await client.from(SUPABASE_ROUNDS_TABLE).insert(row);
 
   if (error) {
+    if (error.code === "23505") {
+      throw new SoloStoreConflictError(error.message);
+    }
+
     throw new Error(`Supabase create round failed: ${error.message}`);
   }
+}
+
+export async function findActiveSoloRoundByPlayer(playerAddress: string): Promise<SoloRound | null> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return findLocalActiveRoundByPlayer(playerAddress);
+  }
+
+  const target = normalizeAddress(playerAddress);
+  const { data, error } = await client
+    .from(SUPABASE_ROUNDS_TABLE)
+    .select("round")
+    .ilike("round->>playerAddress", target)
+    .neq("round->>status", "completed")
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    throw new Error(`Supabase find active round failed: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as Array<{ round: SoloRound }>;
+  return rows[0]?.round ?? null;
 }
 
 export async function updateSoloRound(
@@ -190,7 +240,7 @@ export async function updateSoloRound(
 
   const { data: current, error: readError } = await client
     .from(SUPABASE_ROUNDS_TABLE)
-    .select("round")
+    .select("round, updated_at")
     .eq("id", roundId)
     .maybeSingle();
 
@@ -202,7 +252,8 @@ export async function updateSoloRound(
     return null;
   }
 
-  const nextRound = updater((current as { round: SoloRound }).round);
+  const currentRow = current as { round: SoloRound; updated_at: string };
+  const nextRound = updater(currentRow.round);
   const updatedAt = nextRound.updatedAt || new Date().toISOString();
   const roundToStore =
     nextRound.updatedAt === updatedAt ? nextRound : { ...nextRound, updatedAt };
@@ -214,6 +265,7 @@ export async function updateSoloRound(
       updated_at: updatedAt
     })
     .eq("id", roundId)
+    .eq("updated_at", currentRow.updated_at)
     .select("round")
     .maybeSingle();
 
@@ -222,7 +274,19 @@ export async function updateSoloRound(
   }
 
   if (!data) {
-    return null;
+    // Optimistic concurrency miss: another request updated first.
+    // Return the latest row instead of overwriting with stale state.
+    const { data: latest, error: latestError } = await client
+      .from(SUPABASE_ROUNDS_TABLE)
+      .select("round")
+      .eq("id", roundId)
+      .maybeSingle();
+
+    if (latestError) {
+      throw new Error(`Supabase read-latest round failed: ${latestError.message}`);
+    }
+
+    return latest ? (latest as { round: SoloRound }).round : null;
   }
 
   return (data as { round: SoloRound }).round;
