@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getSoloRoundWithLifecycle } from "@/lib/server/solo-service";
+import { getSoloRoundWithLifecycle } from "@backend/coinflip/service";
 
 export const runtime = "nodejs";
 

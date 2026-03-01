@@ -15,7 +15,6 @@ A one-player Circles game where users pay an entry fee in CRC, then the server r
   - win chance: `1/10`
   - lose chance: `9/10`
 - On win, server sends payout from org avatar
-- `/admin` shows rounds, tx hashes, payout status, and org balance
 
 ## Feature Summary
 
@@ -26,13 +25,12 @@ A one-player Circles game where users pay an entry fee in CRC, then the server r
 - Automatic payout execution after win
 - Safe-aware payout execution when org avatar is a Safe
 - Supabase-backed round persistence (with local file fallback for dev)
-- Admin dashboard with operational visibility
 
 ## Architecture (Beginner-Friendly)
 
 The app has 3 major parts:
 
-1. `Client pages` (`/game`, `/admin`)
+1. `Client pages` (`/game`)
 2. `Server API routes` (`/api/solo/rounds`, `/api/solo/rounds/[id]`)
 3. `Server domain logic` (`src/lib/server/*`)
 
@@ -49,14 +47,11 @@ flowchart LR
   I --> J["payoutSoloWinner"]
   J --> K["Circles SDK + Safe execution"]
   K --> E
-  L["/admin (client)"] --> M["GET /api/solo/rounds"]
-  M --> E
 ```
 
 ## Project Structure
 
 - `src/app/game/page.tsx`: player flow UI
-- `src/app/admin/page.tsx`: admin/ops dashboard
 - `src/app/api/solo/rounds/route.ts`: list/create rounds
 - `src/app/api/solo/rounds/[id]/route.ts`: fetch + process one round
 - `src/lib/server/solo-service.ts`: round lifecycle + game logic
@@ -139,7 +134,6 @@ npm run dev
 6. Open the app
 
 - Player flow: `http://localhost:3000/game`
-- Admin flow: `http://localhost:3000/admin`
 
 ## Environment Variables Explained
 

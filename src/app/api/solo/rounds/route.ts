@@ -1,18 +1,20 @@
 import { NextResponse } from "next/server";
+import { isAddress } from "viem";
 
 import {
   getSoloEconomics,
   getSoloOrgBalanceCRC,
   getSoloOrgName,
   getSoloPayoutConfiguration
-} from "@/lib/server/solo-payout";
+} from "@backend/coinflip/payout";
 import {
   createSoloRound,
   getSoloRoundWithLifecycle,
+  listSoloRoundsByPlayerWithLifecycle,
   listSoloRoundsWithLifecycle,
   normalizeMove,
   SoloGameError
-} from "@/lib/server/solo-service";
+} from "@backend/coinflip/service";
 
 function toErrorResponse(error: unknown) {
   if (error instanceof SoloGameError) {
@@ -33,6 +35,10 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const roundId = url.searchParams.get("roundId")?.trim();
+    const playerAddress = url.searchParams.get("playerAddress")?.trim();
+    const pendingOnly =
+      url.searchParams.get("pendingOnly")?.trim().toLowerCase() === "1" ||
+      url.searchParams.get("pendingOnly")?.trim().toLowerCase() === "true";
 
     if (roundId) {
       const round = await getSoloRoundWithLifecycle(roundId);
@@ -42,6 +48,39 @@ export async function GET(request: Request) {
       }
 
       return NextResponse.json({ round });
+    }
+
+    if (playerAddress) {
+      if (!isAddress(playerAddress)) {
+        throw new SoloGameError("playerAddress is invalid", 400);
+      }
+
+      const [rounds, payoutConfig, orgBalanceCRC, orgName] = await Promise.all([
+        listSoloRoundsByPlayerWithLifecycle({
+          playerAddress,
+          limit: 120,
+          pendingOnly
+        }),
+        Promise.resolve(getSoloPayoutConfiguration()),
+        getSoloOrgBalanceCRC(),
+        getSoloOrgName()
+      ]);
+
+      const economics = getSoloEconomics();
+
+      return NextResponse.json({
+        rounds,
+        config: {
+          payout: {
+            ...payoutConfig,
+            orgName,
+            orgBalanceCRC,
+            entryFeeCRC: economics.entryFeeCRC,
+            winnerPayoutCRC: economics.winnerPayoutCRC,
+            entryRecipientAddress: economics.entryRecipientAddress
+          }
+        }
+      });
     }
 
     const [rounds, payoutConfig, orgBalanceCRC, orgName] = await Promise.all([

@@ -6,8 +6,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const links = [
-  { href: "/game", label: "Game" },
-  { href: "/admin", label: "Admin" }
+  { href: "/game", label: "Game" }
 ];
 
 export function AppNav() {

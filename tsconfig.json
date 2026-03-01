@@ -16,7 +16,8 @@
     "plugins": [{ "name": "next" }],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@backend/*": ["backend/*"]
     }
   },
   "include": ["next-env.d.ts", "src/**/*", ".next/types/**/*.ts"],
