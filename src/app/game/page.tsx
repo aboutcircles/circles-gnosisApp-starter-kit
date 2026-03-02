@@ -401,8 +401,7 @@ export default function GamePage() {
     <main className="min-h-screen px-4 py-10">
       <div className="mx-auto w-full max-w-xl rounded-3xl border border-ink/10 bg-white/85 p-6 shadow-[0_22px_40px_-28px_rgba(15,23,42,0.45)]">
         <header className="mb-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/60">Coin Flip Miniapp</p>
-          <h1 className="mt-2 font-display text-3xl font-semibold text-ink">Choose your move</h1>
+          <p className="text-xl font-semibold uppercase tracking-[0.24em] text-ink/60 md:text-base">Coin Flip Miniapp</p>
         </header>
 
         <div className="mb-6 rounded-2xl border border-marine/20 bg-marine/[0.04] p-4">
@@ -417,9 +416,6 @@ export default function GamePage() {
               <p className="mt-1 font-display text-2xl leading-none text-emerald-700">{winnerPayoutCRC} CRC</p>
             </div>
           </div>
-          <p className="mt-3 text-xs text-ink/70">
-            You pay {entryFeeCRC} CRC to play. If you win, you get {winnerPayoutCRC} CRC paid back automatically.
-          </p>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -465,8 +461,6 @@ export default function GamePage() {
             )}
           </button>
         </div>
-        <p className="mt-2 text-xs text-ink/65">Both options cost {entryFeeCRC} CRC to enter this round.</p>
-
         {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
 
         {completedOutcome === "win" ? (
