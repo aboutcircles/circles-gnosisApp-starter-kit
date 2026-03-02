@@ -36,9 +36,34 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const roundId = url.searchParams.get("roundId")?.trim();
     const playerAddress = url.searchParams.get("playerAddress")?.trim();
+    const configOnly =
+      url.searchParams.get("configOnly")?.trim().toLowerCase() === "1" ||
+      url.searchParams.get("configOnly")?.trim().toLowerCase() === "true";
     const pendingOnly =
       url.searchParams.get("pendingOnly")?.trim().toLowerCase() === "1" ||
       url.searchParams.get("pendingOnly")?.trim().toLowerCase() === "true";
+
+    if (configOnly) {
+      const [payoutConfig, orgBalanceCRC, orgName] = await Promise.all([
+        Promise.resolve(getSoloPayoutConfiguration()),
+        getSoloOrgBalanceCRC(),
+        getSoloOrgName()
+      ]);
+      const economics = getSoloEconomics();
+
+      return NextResponse.json({
+        config: {
+          payout: {
+            ...payoutConfig,
+            orgName,
+            orgBalanceCRC,
+            entryFeeCRC: economics.entryFeeCRC,
+            winnerPayoutCRC: economics.winnerPayoutCRC,
+            entryRecipientAddress: economics.entryRecipientAddress
+          }
+        }
+      });
+    }
 
     if (roundId) {
       const round = await getSoloRoundWithLifecycle(roundId);
