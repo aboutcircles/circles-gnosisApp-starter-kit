@@ -22,6 +22,16 @@ interface SoloRoundsResponse {
   error?: string;
 }
 
+interface SoloConfigResponse {
+  config?: {
+    payout?: {
+      entryFeeCRC?: string;
+      winnerPayoutCRC?: string;
+    };
+  };
+  error?: string;
+}
+
 function upsertRoundInList(rounds: SoloRound[], updated: SoloRound): SoloRound[] {
   const next = new Map<string, SoloRound>();
   for (const item of rounds) {
@@ -82,6 +92,8 @@ export default function GamePage() {
   const [error, setError] = useState<string | null>(null);
   const [round, setRound] = useState<SoloRound | null>(null);
   const [myRounds, setMyRounds] = useState<SoloRound[]>([]);
+  const [entryFeeCRC, setEntryFeeCRC] = useState<string>("1");
+  const [winnerPayoutCRC, setWinnerPayoutCRC] = useState<string>("2");
 
   const fetchMyRounds = useCallback(async (): Promise<SoloRound[]> => {
     if (!connectedAddress) {
@@ -135,6 +147,40 @@ export default function GamePage() {
     return () => {
       isMounted = false;
       cleanup?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchEconomics = async () => {
+      try {
+        const response = await fetch("/api/solo/rounds?configOnly=1", { cache: "no-store" });
+        const payload = (await response.json()) as SoloConfigResponse;
+
+        if (!response.ok || cancelled) {
+          return;
+        }
+
+        const entryFee = payload.config?.payout?.entryFeeCRC?.trim();
+        const winReward = payload.config?.payout?.winnerPayoutCRC?.trim();
+
+        if (entryFee) {
+          setEntryFeeCRC(entryFee);
+        }
+
+        if (winReward) {
+          setWinnerPayoutCRC(winReward);
+        }
+      } catch {
+        // Keep defaults when config fetch fails.
+      }
+    };
+
+    void fetchEconomics();
+
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -359,6 +405,23 @@ export default function GamePage() {
           <h1 className="mt-2 font-display text-3xl font-semibold text-ink">Choose your move</h1>
         </header>
 
+        <div className="mb-6 rounded-2xl border border-marine/20 bg-marine/[0.04] p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-marine/80">Round terms</p>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-marine/15 bg-white/75 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/55">Entry fee</p>
+              <p className="mt-1 font-display text-2xl leading-none text-ink">{entryFeeCRC} CRC</p>
+            </div>
+            <div className="rounded-xl border border-emerald-300/55 bg-emerald-50/75 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">Win reward</p>
+              <p className="mt-1 font-display text-2xl leading-none text-emerald-700">{winnerPayoutCRC} CRC</p>
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-ink/70">
+            You pay {entryFeeCRC} CRC to play. If you win, you get {winnerPayoutCRC} CRC paid back automatically.
+          </p>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <button
             type="button"
@@ -366,7 +429,7 @@ export default function GamePage() {
               void runMove("heads");
             }}
             disabled={!ready || submittingMove !== null || roundActioningId !== null}
-            className="rounded-2xl bg-marine px-4 py-4 text-sm font-semibold uppercase tracking-[0.2em] text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-2xl bg-marine px-4 py-4 text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submittingMove === "heads" ? (
               <span className="inline-flex items-center gap-2">
@@ -374,7 +437,10 @@ export default function GamePage() {
                 Heads
               </span>
             ) : (
-              "Heads"
+              <span className="inline-flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold uppercase tracking-[0.2em]">Heads</span>
+                <span className="text-[10px] font-semibold text-white/80">{entryFeeCRC} CRC</span>
+              </span>
             )}
           </button>
 
@@ -384,7 +450,7 @@ export default function GamePage() {
               void runMove("tails");
             }}
             disabled={!ready || submittingMove !== null || roundActioningId !== null}
-            className="rounded-2xl bg-sand px-4 py-4 text-sm font-semibold uppercase tracking-[0.2em] text-ink transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-2xl bg-sand px-4 py-4 text-ink transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submittingMove === "tails" ? (
               <span className="inline-flex items-center gap-2">
@@ -392,10 +458,14 @@ export default function GamePage() {
                 Tails
               </span>
             ) : (
-              "Tails"
+              <span className="inline-flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold uppercase tracking-[0.2em]">Tails</span>
+                <span className="text-[10px] font-semibold text-ink/65">{entryFeeCRC} CRC</span>
+              </span>
             )}
           </button>
         </div>
+        <p className="mt-2 text-xs text-ink/65">Both options cost {entryFeeCRC} CRC to enter this round.</p>
 
         {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
 
