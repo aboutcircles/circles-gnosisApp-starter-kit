@@ -1,4 +1,4 @@
-const DEFAULT_CIRCLES_RPC_URL = "https://rpc.aboutcircles.com/";
+const DEFAULT_CIRCLES_RPC_URL = "https://staging.circlesubi.network/";
 const DEFAULT_CIRCLES_EVENTS_RPC_URL = "https://staging.circlesubi.network/";
 const DEFAULT_RECIPIENT_ADDRESS = "0x7B8a5a4673fcd082b742304032eA49D6bC6e01f5";
 

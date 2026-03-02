@@ -20,7 +20,7 @@ import { gnosis } from "viem/chains";
 
 import type { SoloPayout } from "./types";
 
-const DEFAULT_CHAIN_RPC_URL = "https://rpc.aboutcircles.com/";
+const DEFAULT_CHAIN_RPC_URL = "https://staging.circlesubi.network/";
 const DEFAULT_ENTRY_FEE_CRC = "1";
 const DEFAULT_WIN_PAYOUT_CRC = "2";
 const AMOUNT_PATTERN = /^(0|[1-9]\d*)(\.\d{1,18})?$/;

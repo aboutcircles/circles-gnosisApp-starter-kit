@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CircleX, Loader2, Trophy } from "lucide-react";
 
 import type { SoloMove, SoloRound } from "@/types/solo";
@@ -22,99 +22,66 @@ interface SoloRoundsResponse {
   error?: string;
 }
 
-const POLL_INTERVAL_MS = 7000;
-const MAX_POLL_ATTEMPTS = 24;
+function upsertRoundInList(rounds: SoloRound[], updated: SoloRound): SoloRound[] {
+  const next = new Map<string, SoloRound>();
+  for (const item of rounds) {
+    next.set(item.id, item);
+  }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+  const existing = next.get(updated.id);
+  if (!existing || updated.updatedAt >= existing.updatedAt) {
+    next.set(updated.id, updated);
+  }
 
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        window.clearTimeout(timer);
-        reject(error);
+  return Array.from(next.values()).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+async function reportTxHash(roundId: string, playerAddress: string, txHash: string): Promise<SoloRound | null> {
+  try {
+    const res = await fetch(`/api/solo/rounds/${roundId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "report_tx", playerAddress, txHash })
+    });
+    const payload = (await res.json()) as SoloRoundResponse;
+    return payload.round ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function pollRoundUntilResolved(
+  roundId: string,
+  intervalMs: number = 3000,
+  maxAttempts: number = 80
+): Promise<SoloRound | null> {
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    try {
+      const res = await fetch(`/api/solo/rounds?roundId=${encodeURIComponent(roundId)}`, {
+        cache: "no-store"
+      });
+      const payload = (await res.json()) as SoloRoundResponse;
+      const round = payload.round;
+      if (round && round.status === "completed") {
+        return round;
       }
-    );
-  });
+    } catch {
+      // keep polling
+    }
+  }
+  return null;
 }
 
 export default function GamePage() {
   const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [submittingMove, setSubmittingMove] = useState<SoloMove | null>(null);
+  const [roundActioningId, setRoundActioningId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("Connect wallet in host app.");
   const [error, setError] = useState<string | null>(null);
   const [round, setRound] = useState<SoloRound | null>(null);
   const [myRounds, setMyRounds] = useState<SoloRound[]>([]);
-
-  const roundPollTimer = useRef<number | null>(null);
-  const pollAttemptsRef = useRef(0);
-
-  const clearRoundPoll = useCallback(() => {
-    if (roundPollTimer.current !== null) {
-      window.clearInterval(roundPollTimer.current);
-      roundPollTimer.current = null;
-    }
-  }, []);
-
-  const pollRound = useCallback(
-    (roundId: string) => {
-      clearRoundPoll();
-      pollAttemptsRef.current = 0;
-
-      roundPollTimer.current = window.setInterval(async () => {
-        pollAttemptsRef.current += 1;
-        if (pollAttemptsRef.current > MAX_POLL_ATTEMPTS) {
-          setStatus("Still pending. Re-open wallet activity and tap Heads/Tails once to retry.");
-          clearRoundPoll();
-          return;
-        }
-
-        try {
-          const response = await fetch(`/api/solo/rounds/${roundId}`, { cache: "no-store" });
-          const payload = (await response.json()) as SoloRoundResponse;
-
-          if (!response.ok || !payload.round) {
-            return;
-          }
-
-          setRound(payload.round);
-          void fetch(
-            `/api/solo/rounds?playerAddress=${encodeURIComponent(payload.round.playerAddress)}`,
-            { cache: "no-store" }
-          )
-            .then(async (res) => {
-              const data = (await res.json()) as SoloRoundsResponse;
-              if (res.ok) {
-                setMyRounds(data.rounds ?? []);
-              }
-            })
-            .catch(() => undefined);
-
-          if (payload.round.status === "completed") {
-            const outcome = payload.round.result?.outcome ?? "unknown";
-            setStatus(`Round completed: ${outcome.toUpperCase()}`);
-            clearRoundPoll();
-            return;
-          }
-
-          if (payload.round.payment.status === "paid") {
-            setStatus("Payment detected. Resolving round...");
-            return;
-          }
-
-          setStatus("Waiting for payment confirmation...");
-        } catch {
-          // Keep polling quietly.
-        }
-      }, POLL_INTERVAL_MS);
-    },
-    [clearRoundPoll]
-  );
 
   const fetchMyRounds = useCallback(async (): Promise<SoloRound[]> => {
     if (!connectedAddress) {
@@ -140,20 +107,7 @@ export default function GamePage() {
     }
   }, [connectedAddress]);
 
-  const findAndResumeActiveRound = useCallback(async (): Promise<SoloRound | null> => {
-    const rounds = await fetchMyRounds();
-    if (!rounds.length) return null;
-    const active = rounds.find((item) => item.status !== "completed");
-
-    if (!active) {
-      return null;
-    }
-
-    setRound(active);
-    pollRound(active.id);
-    return active;
-  }, [fetchMyRounds, pollRound]);
-
+  // SDK init
   useEffect(() => {
     let cleanup: (() => void) | undefined;
     let isMounted = true;
@@ -181,18 +135,52 @@ export default function GamePage() {
     return () => {
       isMounted = false;
       cleanup?.();
-      clearRoundPoll();
     };
-  }, [clearRoundPoll]);
+  }, []);
 
+  // Fetch rounds on wallet connect
   useEffect(() => {
     if (!connectedAddress) {
       setMyRounds([]);
       return;
     }
-
     void fetchMyRounds();
   }, [connectedAddress, fetchMyRounds]);
+
+  /** Send transactions via miniapp SDK and return the first tx hash, or null on timeout. */
+  const fireTransactions = useCallback(
+    async (
+      txs: Array<{ to: string; data: `0x${string}`; value: `0x${string}` }>
+    ): Promise<string | null> => {
+      const sdkModule = (await import("@aboutcircles/miniapp-sdk")) as unknown as MiniappSdk;
+
+      try {
+        const hashes = await sdkModule.sendTransactions(txs);
+        return hashes?.[0] ?? null;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // UserOperation timeout — tx may still land on-chain
+        if (msg.includes("Timed out") || msg.includes("UserOperation")) {
+          return null;
+        }
+        throw e;
+      }
+    },
+    []
+  );
+
+  const showResult = useCallback(
+    (resolved: SoloRound) => {
+      setRound(resolved);
+      setMyRounds((current) => upsertRoundInList(current, resolved));
+      if (resolved.status === "completed") {
+        const outcome = resolved.result?.outcome ?? "unknown";
+        setStatus(`Round completed: ${outcome.toUpperCase()}`);
+      }
+      void fetchMyRounds();
+    },
+    [fetchMyRounds]
+  );
 
   const runMove = useCallback(
     async (move: SoloMove) => {
@@ -204,78 +192,161 @@ export default function GamePage() {
       setSubmittingMove(move);
       setError(null);
       setStatus(`Creating ${move.toUpperCase()} round...`);
-      let createdRoundId: string | null = null;
 
       try {
+        // 1. Create the round on the backend
         const createResponse = await fetch("/api/solo/rounds", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            playerAddress: connectedAddress,
-            move
-          })
+          body: JSON.stringify({ playerAddress: connectedAddress, move })
         });
 
         const createPayload = (await createResponse.json()) as SoloRoundResponse;
 
         if (!createResponse.ok || !createPayload.round) {
-          if (createResponse.status === 409) {
-            const resumed = await findAndResumeActiveRound();
-            if (resumed) {
-              setStatus("Resumed existing pending round. Waiting for payment confirmation...");
-              return;
-            }
-          }
           throw new Error(createPayload.error || "Could not create round.");
         }
 
         const newRound = createPayload.round;
-        createdRoundId = newRound.id;
         setRound(newRound);
-        void fetchMyRounds();
-        setStatus("Round created. Sending payment transaction...");
 
         const txs = newRound.payment.hostTransactions ?? [];
         if (!txs.length) {
           throw new Error("No payment transaction payload returned from backend.");
         }
 
-        const sdkModule = (await import("@aboutcircles/miniapp-sdk")) as unknown as MiniappSdk;
-        await withTimeout(
-          sdkModule.sendTransactions(txs),
-          45000,
-          "Timed out waiting for miniapp transaction response."
-        );
+        // 2. Sign & send via miniapp SDK
+        setStatus("Signing transaction...");
+        const txHash = await fireTransactions(txs);
 
-        setStatus("Transaction sent. Waiting for payment confirmation...");
-        pollRound(newRound.id);
+        // 3. If we got a hash, report it — server resolves the round immediately
+        if (txHash) {
+          setStatus("Resolving...");
+          const resolved = await reportTxHash(newRound.id, connectedAddress, txHash);
+          if (resolved && resolved.status === "completed") {
+            showResult(resolved);
+            return;
+          }
+        }
+
+        // 4. Fallback: SDK timed out or report didn't complete — short poll
+        setStatus("Waiting for confirmation...");
+        const resolved = await pollRoundUntilResolved(newRound.id, 3000, 20);
+        if (resolved) {
+          showResult(resolved);
+        } else {
+          setStatus("Round is still processing. It will appear in your history when done.");
+        }
       } catch (e) {
         const message = e instanceof Error ? e.message : "Move failed.";
         const lower = message.toLowerCase();
 
-        if (
-          lower.includes("timed out while waiting for user operation") ||
-          lower.includes("timed out waiting for miniapp transaction response")
-        ) {
-          setStatus("Transaction may be pending. Waiting for confirmation...");
-          if (createdRoundId) {
-            pollRound(createdRoundId);
-            return;
-          }
-          const resumed = await findAndResumeActiveRound();
-          if (!resumed) {
-            setStatus("Could not resume pending round. Tap Heads/Tails once more.");
-          }
+        if (lower.includes("user rejected") || lower.includes("user denied")) {
+          setError("Transaction was rejected.");
+          setStatus("Ready. Choose Heads or Tails.");
         } else {
           setError(message);
-          setStatus("Move failed. Try again.");
+          setStatus("Transaction failed. Try again or abandon the round.");
         }
       } finally {
         setSubmittingMove(null);
         void fetchMyRounds();
       }
     },
-    [connectedAddress, fetchMyRounds, findAndResumeActiveRound, pollRound]
+    [connectedAddress, fetchMyRounds, fireTransactions, showResult]
+  );
+
+  const resumeRoundPayment = useCallback(
+    async (target: SoloRound) => {
+      if (!connectedAddress) {
+        setError("No connected wallet found.");
+        return;
+      }
+
+      setRoundActioningId(target.id);
+      setError(null);
+      setRound(target);
+
+      try {
+        const txs = target.payment.hostTransactions ?? [];
+        if (!txs.length) {
+          throw new Error("No payment transaction payload found for this round.");
+        }
+
+        setStatus("Signing transaction...");
+        const txHash = await fireTransactions(txs);
+
+        if (txHash) {
+          setStatus("Resolving...");
+          const resolved = await reportTxHash(target.id, connectedAddress, txHash);
+          if (resolved && resolved.status === "completed") {
+            showResult(resolved);
+            return;
+          }
+        }
+
+        setStatus("Waiting for confirmation...");
+        const resolved = await pollRoundUntilResolved(target.id, 3000, 20);
+        if (resolved) {
+          showResult(resolved);
+        } else {
+          setStatus("Round is still processing. It will appear in your history when done.");
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Could not resume payment.";
+        const lower = message.toLowerCase();
+
+        if (lower.includes("user rejected") || lower.includes("user denied")) {
+          setError("Transaction was rejected.");
+          setStatus("Ready. Choose Heads or Tails.");
+        } else {
+          setError(message);
+          setStatus("Transaction failed. Try again or abandon the round.");
+        }
+      } finally {
+        setRoundActioningId(null);
+        void fetchMyRounds();
+      }
+    },
+    [connectedAddress, fetchMyRounds, fireTransactions, showResult]
+  );
+
+  const abandonRound = useCallback(
+    async (target: SoloRound) => {
+      if (!connectedAddress) {
+        setError("No connected wallet found.");
+        return;
+      }
+
+      setRoundActioningId(target.id);
+      setError(null);
+      setStatus("Abandoning pending round...");
+
+      try {
+        const response = await fetch(`/api/solo/rounds/${target.id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "abandon", playerAddress: connectedAddress })
+        });
+        const payload = (await response.json()) as SoloRoundResponse;
+
+        if (!response.ok || !payload.round) {
+          throw new Error(payload.error || "Could not abandon round.");
+        }
+
+        setRound(payload.round);
+        setMyRounds((current) => upsertRoundInList(current, payload.round!));
+        setStatus("Round abandoned. You can start a new move.");
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Could not abandon round.";
+        setError(message);
+        setStatus("Abandon failed.");
+      } finally {
+        setRoundActioningId(null);
+        void fetchMyRounds();
+      }
+    },
+    [connectedAddress, fetchMyRounds]
   );
 
   const completedOutcome = round?.status === "completed" ? round.result?.outcome ?? null : null;
@@ -294,7 +365,7 @@ export default function GamePage() {
             onClick={() => {
               void runMove("heads");
             }}
-            disabled={!ready || submittingMove !== null}
+            disabled={!ready || submittingMove !== null || roundActioningId !== null}
             className="rounded-2xl bg-marine px-4 py-4 text-sm font-semibold uppercase tracking-[0.2em] text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submittingMove === "heads" ? (
@@ -312,7 +383,7 @@ export default function GamePage() {
             onClick={() => {
               void runMove("tails");
             }}
-            disabled={!ready || submittingMove !== null}
+            disabled={!ready || submittingMove !== null || roundActioningId !== null}
             className="rounded-2xl bg-sand px-4 py-4 text-sm font-semibold uppercase tracking-[0.2em] text-ink transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submittingMove === "tails" ? (
@@ -362,19 +433,9 @@ export default function GamePage() {
             </p>
             <div className="mt-2 space-y-2">
               {myRounds.map((item) => (
-                <button
+                <div
                   key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setRound(item);
-                    if (item.status !== "completed") {
-                      setStatus("Resumed pending round. Waiting for payment confirmation...");
-                      pollRound(item.id);
-                    } else {
-                      setStatus("Round loaded.");
-                    }
-                  }}
-                  className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-left text-xs text-ink/80 hover:border-ink/30"
+                  className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-left text-xs text-ink/80"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-mono">#{item.id.slice(0, 8)}</p>
@@ -383,10 +444,16 @@ export default function GamePage() {
                         className={
                           item.result?.outcome === "win"
                             ? "rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700"
-                            : "rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700"
+                            : item.result?.outcome === "lose"
+                              ? "rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700"
+                              : "rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700"
                         }
                       >
-                        {item.result?.outcome === "win" ? "Win" : "Lose"}
+                        {item.result?.outcome === "win"
+                          ? "Win"
+                          : item.result?.outcome === "lose"
+                            ? "Lose"
+                            : "Cancelled"}
                       </span>
                     ) : (
                       <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700">
@@ -395,7 +462,31 @@ export default function GamePage() {
                     )}
                   </div>
                   <p className="mt-1 uppercase">Move: {item.move}</p>
-                </button>
+                  {item.status !== "completed" ? (
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void resumeRoundPayment(item);
+                        }}
+                        disabled={roundActioningId !== null}
+                        className="rounded-lg bg-marine px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {roundActioningId === item.id ? "Working..." : "Pay now"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void abandonRound(item);
+                        }}
+                        disabled={roundActioningId !== null}
+                        className="rounded-lg border border-ink/20 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/80 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Abandon
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               ))}
             </div>
           </div>

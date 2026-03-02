@@ -55,32 +55,13 @@ export async function GET(request: Request) {
         throw new SoloGameError("playerAddress is invalid", 400);
       }
 
-      const [rounds, payoutConfig, orgBalanceCRC, orgName] = await Promise.all([
-        listSoloRoundsByPlayerWithLifecycle({
-          playerAddress,
-          limit: 120,
-          pendingOnly
-        }),
-        Promise.resolve(getSoloPayoutConfiguration()),
-        getSoloOrgBalanceCRC(),
-        getSoloOrgName()
-      ]);
-
-      const economics = getSoloEconomics();
-
-      return NextResponse.json({
-        rounds,
-        config: {
-          payout: {
-            ...payoutConfig,
-            orgName,
-            orgBalanceCRC,
-            entryFeeCRC: economics.entryFeeCRC,
-            winnerPayoutCRC: economics.winnerPayoutCRC,
-            entryRecipientAddress: economics.entryRecipientAddress
-          }
-        }
+      const rounds = await listSoloRoundsByPlayerWithLifecycle({
+        playerAddress,
+        limit: 120,
+        pendingOnly
       });
+
+      return NextResponse.json({ rounds });
     }
 
     const [rounds, payoutConfig, orgBalanceCRC, orgName] = await Promise.all([

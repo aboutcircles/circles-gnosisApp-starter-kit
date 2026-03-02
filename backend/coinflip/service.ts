@@ -1,15 +1,14 @@
 import { randomInt, randomUUID } from "node:crypto";
 
-import { CirclesRpc } from "@aboutcircles/sdk-rpc";
-import type { TransactionHistoryRow } from "@aboutcircles/sdk-rpc";
-import { formatUnits, isAddress, parseUnits, type Address } from "viem";
+import { isAddress, parseUnits, type Address } from "viem";
 
-import { checkPaymentReceived, eventMatchesData, generatePaymentLink } from "./circles";
+import { checkPaymentReceived, generatePaymentLink } from "./circles";
 import { buildMiniappCompatiblePayment } from "./payment-builder";
 import {
   createSoloRoundRecord,
   findActiveSoloRoundByPlayer,
   getSoloRound,
+  listSoloRoundsByPlayer,
   listSoloRounds,
   SoloStoreConflictError,
   updateSoloRound
@@ -27,15 +26,10 @@ export class SoloGameError extends Error {
 }
 
 const AMOUNT_PATTERN = /^(0|[1-9]\d*)(\.\d{1,18})?$/;
-const DEFAULT_CIRCLES_RPC_URL = "https://rpc.aboutcircles.com/";
 const createRoundLocks = new Map<string, Promise<void>>();
 
 function normalizeAddressKey(value: string): string {
   return value.trim().toLowerCase();
-}
-
-function matchesPlayer(round: SoloRound, playerAddress: string): boolean {
-  return normalizeAddressKey(round.playerAddress) === normalizeAddressKey(playerAddress);
 }
 
 async function withPlayerCreateLock<T>(playerAddress: string, task: () => Promise<T>): Promise<T> {
@@ -87,189 +81,6 @@ function parseAmountToAtto(value: string, field: string): bigint {
   }
 
   return atto;
-}
-
-function formatCrcAmount(valueAtto: bigint): string {
-  const amount = formatUnits(valueAtto, 18);
-  const [whole, fraction = ""] = amount.split(".");
-  const trimmedFraction = fraction.replace(/0+$/, "");
-  return trimmedFraction ? `${whole}.${trimmedFraction}` : whole;
-}
-
-function createCirclesRpc(): CirclesRpc {
-  return new CirclesRpc(
-    process.env.CIRCLES_RPC_URL ||
-      process.env.NEXT_PUBLIC_CIRCLES_RPC_URL ||
-      DEFAULT_CIRCLES_RPC_URL
-  );
-}
-
-async function ensurePlayerCanPayEntryFee(params: {
-  playerAddress: Address;
-  recipientAddress: Address;
-  entryFeeAtto: bigint;
-}): Promise<void> {
-  try {
-    const rpc = createCirclesRpc();
-    const [playerAvatarInfo, recipientAvatarInfo] = await Promise.all([
-      rpc.avatar.getAvatarInfo(params.playerAddress),
-      rpc.avatar.getAvatarInfo(params.recipientAddress)
-    ]);
-
-    if (!playerAvatarInfo) {
-      throw new SoloGameError(
-        `Player address is not a Circles avatar: ${params.playerAddress}. Use the player's Circles avatar/safe address (the one holding CRC), not an EOA signer address.`,
-        400
-      );
-    }
-
-    if (!recipientAvatarInfo) {
-      throw new SoloGameError(
-        `Recipient is not a Circles avatar: ${params.recipientAddress}. Check CIRCLES_ORG_AVATAR_ADDRESS.`,
-        400
-      );
-    }
-
-    const maxTransferable = await rpc.pathfinder.findMaxFlow({
-      from: params.playerAddress.toLowerCase() as Address,
-      to: params.recipientAddress.toLowerCase() as Address
-    });
-
-    if (maxTransferable < params.entryFeeAtto) {
-      throw new SoloGameError(
-        `No valid transfer path for this move. Required ${formatCrcAmount(params.entryFeeAtto)} CRC to ${params.recipientAddress}, but max transferable is ${formatCrcAmount(maxTransferable)} CRC.`,
-        400
-      );
-    }
-  } catch (error) {
-    if (error instanceof SoloGameError) {
-      throw error;
-    }
-
-    const message = error instanceof Error ? error.message : "Unknown pathfinder error";
-
-    throw new SoloGameError(
-      `Could not verify transfer path to recipient. ${message}`,
-      400
-    );
-  }
-}
-
-function toUnixSeconds(value: string): number {
-  const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) {
-    return 0;
-  }
-  return Math.floor(ms / 1000);
-}
-
-type TransferDataMatchState = "match" | "mismatch" | "missing";
-
-function parseTransactionEvents(rawEvents: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(rawEvents)) {
-    return rawEvents.filter(
-      (entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object")
-    );
-  }
-
-  if (typeof rawEvents !== "string" || !rawEvents.trim()) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(rawEvents);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.filter(
-      (entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object")
-    );
-  } catch {
-    return [];
-  }
-}
-
-function transferDataMatchState(rawEvents: unknown, expectedData: string): TransferDataMatchState {
-  const events = parseTransactionEvents(rawEvents);
-  const transferDataEvents = events.filter((event) => {
-    const eventType = String(event.$type ?? event.event ?? "").trim();
-    return eventType === "CrcV2_TransferData";
-  });
-
-  if (!transferDataEvents.length) {
-    return "missing";
-  }
-
-  for (const event of transferDataEvents) {
-    const dataField = String(event.Data ?? event.data ?? "");
-    if (eventMatchesData(dataField, expectedData)) {
-      return "match";
-    }
-  }
-
-  return "mismatch";
-}
-
-async function findPaymentFromTransferHistory(params: {
-  playerAddress: string;
-  recipientAddress: string;
-  minAmountAtto: bigint;
-  createdAtIso: string;
-  expectedData?: string;
-}) {
-  const rpc = createCirclesRpc();
-  const query = rpc.transaction.getTransactionHistory(params.recipientAddress as Address, 50, "DESC");
-  const createdAtSeconds = toUnixSeconds(params.createdAtIso);
-  const targetFrom = params.playerAddress.toLowerCase();
-  const targetTo = params.recipientAddress.toLowerCase();
-
-  let scannedPages = 0;
-  while (scannedPages < 5 && (await query.queryNextPage())) {
-    scannedPages += 1;
-    const rows = (query.currentPage?.results ?? []) as TransactionHistoryRow[];
-
-    for (const row of rows) {
-      const from = row.from.toLowerCase();
-      const to = row.to.toLowerCase();
-      const txHash = row.transactionHash;
-      const timestamp = row.timestamp;
-      const amountAtto = row.attoCircles ?? BigInt(row.value);
-
-      if (!txHash || from !== targetFrom || to !== targetTo) {
-        continue;
-      }
-
-      if (timestamp < createdAtSeconds || amountAtto < params.minAmountAtto) {
-        continue;
-      }
-
-      if (params.expectedData) {
-        const rawEvents = (row as TransactionHistoryRow & { events?: unknown }).events;
-        const matchState = transferDataMatchState(rawEvents, params.expectedData);
-        if (matchState === "mismatch") {
-          continue;
-        }
-      }
-
-      return {
-        transactionHash: txHash,
-        from,
-        to,
-        data: "",
-        blockNumber: String(row.blockNumber),
-        timestamp: String(timestamp),
-        transactionIndex: String(row.transactionIndex),
-        logIndex: String(row.logIndex)
-      };
-    }
-
-    if (!query.currentPage?.hasMore) {
-      break;
-    }
-  }
-
-  return null;
 }
 
 function buildMoveData(roundId: string, move: SoloMove, playerAddress: string): string {
@@ -332,12 +143,6 @@ export async function createSoloRound(params: {
     const entryFee = parseAmount(economics.entryFeeCRC, "SOLO_ENTRY_FEE_CRC");
     const entryFeeAtto = parseAmountToAtto(economics.entryFeeCRC, "SOLO_ENTRY_FEE_CRC");
     const entryRecipientAddress = orgAddress;
-
-    await ensurePlayerCanPayEntryFee({
-      playerAddress: params.playerAddress as Address,
-      recipientAddress: entryRecipientAddress as Address,
-      entryFeeAtto
-    });
 
     const roundId = randomUUID();
     const nowIso = new Date().toISOString();
@@ -409,78 +214,7 @@ export async function createSoloRound(params: {
   });
 }
 
-export async function processSoloRoundLifecycle(roundId: string): Promise<SoloRound | null> {
-  const current = await getSoloRound(roundId);
-
-  if (!current) {
-    return null;
-  }
-
-  if (current.status === "completed") {
-    if (!shouldRetryLegacyPayout(current)) {
-      return current;
-    }
-
-    const payout = await payoutSoloWinner({
-      roundId,
-      winnerAddress: current.playerAddress,
-      amountCRC: current.payout.amountCRC
-    });
-
-    const retried = await updateSoloRound(roundId, (round) => {
-      if (!shouldRetryLegacyPayout(round)) {
-        return round;
-      }
-
-      return {
-        ...round,
-        updatedAt: new Date().toISOString(),
-        payout: {
-          ...payout,
-          retryCount: (round.payout.retryCount ?? 0) + 1
-        }
-      };
-    });
-
-    return retried ?? { ...current, updatedAt: new Date().toISOString(), payout };
-  }
-
-  if (current.status === "resolving") {
-    return current;
-  }
-
-  const minAmount = parseAmount(current.payment.amountCRC, "payment.amountCRC");
-  const minAmountAtto = parseAmountToAtto(current.payment.amountCRC, "payment.amountCRC");
-
-  let payment = null;
-  try {
-    payment = await checkPaymentReceived(
-      current.payment.expectedData,
-      minAmount,
-      current.payment.recipientAddress
-    );
-  } catch {
-    payment = null;
-  }
-
-  if (!payment) {
-    try {
-      payment = await findPaymentFromTransferHistory({
-        playerAddress: current.playerAddress,
-        recipientAddress: current.payment.recipientAddress,
-        minAmountAtto,
-        createdAtIso: current.createdAt,
-        expectedData: current.payment.expectedData
-      });
-    } catch {
-      payment = null;
-    }
-  }
-
-  if (!payment) {
-    return current;
-  }
-
+async function resolveRound(roundId: string, txHash: string): Promise<SoloRound | null> {
   const claimToken = randomUUID();
   const nowIso = new Date().toISOString();
 
@@ -491,18 +225,18 @@ export async function processSoloRoundLifecycle(roundId: string): Promise<SoloRo
 
     return {
       ...round,
-      status: "resolving",
+      status: "resolving" as const,
       updatedAt: nowIso,
       processingToken: claimToken,
       payment: {
         ...round.payment,
-        status: "paid",
-        transactionHash: payment!.transactionHash,
+        status: "paid" as const,
+        transactionHash: txHash,
         paidAt: nowIso
       },
       payout: {
         ...round.payout,
-        status: "processing",
+        status: "processing" as const,
         processedAt: nowIso
       }
     };
@@ -516,7 +250,7 @@ export async function processSoloRoundLifecycle(roundId: string): Promise<SoloRo
     return claimed;
   }
 
-  const isWin = randomInt(0, 10) === 0;
+  const isWin = randomInt(0, 2) === 0;
   const outcome = isWin ? "win" : "lose";
   const coin: SoloMove = isWin
     ? claimed.move
@@ -563,15 +297,79 @@ export async function processSoloRoundLifecycle(roundId: string): Promise<SoloRo
   return completed ?? { ...claimed, result: { coin, outcome, resolvedAt: nowIso }, payout };
 }
 
-export async function listSoloRoundsWithLifecycle(limit: number = 40): Promise<SoloRound[]> {
-  const rounds = await listSoloRounds(limit);
-
-  for (const round of rounds) {
-    if (round.status !== "completed") {
-      await processSoloRoundLifecycle(round.id);
-    }
+export async function reportSoloTxHash(params: {
+  roundId: string;
+  playerAddress: string;
+  txHash: string;
+}): Promise<SoloRound> {
+  if (!isAddress(params.playerAddress)) {
+    throw new SoloGameError("playerAddress is invalid", 400);
   }
 
+  const current = await getSoloRound(params.roundId);
+  if (!current) {
+    throw new SoloGameError("Round not found", 404);
+  }
+
+  if (normalizeAddressKey(current.playerAddress) !== normalizeAddressKey(params.playerAddress)) {
+    throw new SoloGameError("Address mismatch", 403);
+  }
+
+  if (current.status !== "awaiting_payment") {
+    return current;
+  }
+
+  const resolved = await resolveRound(params.roundId, params.txHash);
+  return resolved ?? current;
+}
+
+export async function getSoloRoundWithLifecycle(roundId: string): Promise<SoloRound | null> {
+  const current = await getSoloRound(roundId);
+  if (!current) return null;
+
+  // Auto-detect on-chain payment for rounds awaiting payment
+  if (current.status === "awaiting_payment") {
+    try {
+      const event = await checkPaymentReceived(
+        current.payment.expectedData,
+        0,
+        current.payment.recipientAddress
+      );
+
+      if (event?.transactionHash) {
+        const resolved = await resolveRound(roundId, event.transactionHash);
+        if (resolved) return resolved;
+      }
+    } catch {
+      // Payment check failed — return current state, caller can retry
+    }
+
+    return current;
+  }
+
+  if (current.status === "completed" && shouldRetryLegacyPayout(current)) {
+    const payout = await payoutSoloWinner({
+      roundId,
+      winnerAddress: current.playerAddress,
+      amountCRC: current.payout.amountCRC
+    });
+
+    const retried = await updateSoloRound(roundId, (round) => {
+      if (!shouldRetryLegacyPayout(round)) return round;
+      return {
+        ...round,
+        updatedAt: new Date().toISOString(),
+        payout: { ...payout, retryCount: (round.payout.retryCount ?? 0) + 1 }
+      };
+    });
+
+    return retried ?? current;
+  }
+
+  return current;
+}
+
+export async function listSoloRoundsWithLifecycle(limit: number = 40): Promise<SoloRound[]> {
   return listSoloRounds(limit);
 }
 
@@ -581,32 +379,63 @@ export async function listSoloRoundsByPlayerWithLifecycle(params: {
   pendingOnly?: boolean;
 }): Promise<SoloRound[]> {
   const limit = params.limit ?? 100;
-  const initialRounds = await listSoloRounds(limit);
-  const matchingRounds = initialRounds.filter((round) => matchesPlayer(round, params.playerAddress));
-
-  for (const round of matchingRounds) {
-    if (round.status !== "completed") {
-      await processSoloRoundLifecycle(round.id);
-    }
-  }
-
-  const refreshedRounds = await listSoloRounds(limit);
-  const matchingRefreshed = refreshedRounds.filter((round) =>
-    matchesPlayer(round, params.playerAddress)
-  );
+  const rounds = await listSoloRoundsByPlayer(params.playerAddress, limit);
 
   if (params.pendingOnly) {
-    return matchingRefreshed.filter((round) => round.status !== "completed");
+    return rounds.filter((round) => round.status !== "completed");
   }
 
-  return matchingRefreshed;
+  return rounds;
 }
 
-export async function getSoloRoundWithLifecycle(roundId: string): Promise<SoloRound | null> {
-  const processed = await processSoloRoundLifecycle(roundId);
-  if (processed) {
-    return processed;
+export async function abandonSoloRound(params: {
+  roundId: string;
+  playerAddress: string;
+}): Promise<SoloRound> {
+  if (!isAddress(params.playerAddress)) {
+    throw new SoloGameError("playerAddress is invalid", 400);
   }
 
-  return getSoloRound(roundId);
+  const current = await getSoloRound(params.roundId);
+  if (!current) {
+    throw new SoloGameError("Round not found", 404);
+  }
+
+  if (normalizeAddressKey(current.playerAddress) !== normalizeAddressKey(params.playerAddress)) {
+    throw new SoloGameError("You can only abandon your own round", 403);
+  }
+
+  if (current.status === "completed") {
+    return current;
+  }
+
+  if (current.status === "resolving" || current.payment.status === "paid") {
+    throw new SoloGameError("Round is already processing and cannot be abandoned", 409);
+  }
+
+  const nowIso = new Date().toISOString();
+  const updated = await updateSoloRound(params.roundId, (round) => {
+    if (round.status !== "awaiting_payment") {
+      return round;
+    }
+
+    return {
+      ...round,
+      status: "completed",
+      updatedAt: nowIso,
+      processingToken: undefined,
+      payout: {
+        ...round.payout,
+        status: "skipped",
+        error: "Round abandoned by player before payment confirmation.",
+        processedAt: nowIso
+      }
+    };
+  });
+
+  if (!updated) {
+    throw new SoloGameError("Round not found", 404);
+  }
+
+  return updated;
 }

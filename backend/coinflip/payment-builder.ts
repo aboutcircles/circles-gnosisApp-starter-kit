@@ -13,7 +13,7 @@ interface TransactionRequest {
   nonce?: number;
 }
 
-const DEFAULT_CHAIN_RPC_URL = "https://rpc.aboutcircles.com/";
+const DEFAULT_CHAIN_RPC_URL = "https://staging.circlesubi.network/";
 
 function toHexValue(value: bigint): `0x${string}` {
   return `0x${value.toString(16)}`;

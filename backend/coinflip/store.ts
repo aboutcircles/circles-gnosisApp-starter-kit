@@ -95,6 +95,19 @@ async function listLocalRounds(limit: number = 40): Promise<SoloRound[]> {
     .slice(0, limit);
 }
 
+async function listLocalRoundsByPlayer(
+  playerAddress: string,
+  limit: number = 120
+): Promise<SoloRound[]> {
+  const rounds = await readRounds();
+  const target = normalizeAddress(playerAddress);
+
+  return rounds
+    .filter((round) => normalizeAddress(round.playerAddress) === target)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, limit);
+}
+
 async function getLocalRound(roundId: string): Promise<SoloRound | null> {
   const rounds = await readRounds();
   return rounds.find((round) => round.id === roundId) ?? null;
@@ -180,6 +193,30 @@ export async function getSoloRound(roundId: string): Promise<SoloRound | null> {
   }
 
   return (data as { round: SoloRound }).round;
+}
+
+export async function listSoloRoundsByPlayer(
+  playerAddress: string,
+  limit: number = 120
+): Promise<SoloRound[]> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return listLocalRoundsByPlayer(playerAddress, limit);
+  }
+
+  const target = normalizeAddress(playerAddress);
+  const { data, error } = await client
+    .from(SUPABASE_ROUNDS_TABLE)
+    .select("round, created_at")
+    .ilike("round->>playerAddress", target)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Supabase list rounds by player failed: ${error.message}`);
+  }
+
+  return ((data ?? []) as Array<{ round: SoloRound }>).map((row) => row.round);
 }
 
 export async function createSoloRoundRecord(round: SoloRound): Promise<void> {

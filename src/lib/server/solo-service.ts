@@ -26,7 +26,7 @@ export class SoloGameError extends Error {
 }
 
 const AMOUNT_PATTERN = /^(0|[1-9]\d*)(\.\d{1,18})?$/;
-const DEFAULT_CIRCLES_RPC_URL = "https://rpc.aboutcircles.com/";
+const DEFAULT_CIRCLES_RPC_URL = "https://staging.circlesubi.network/";
 const createRoundLocks = new Map<string, Promise<void>>();
 
 function normalizeAddressKey(value: string): string {
