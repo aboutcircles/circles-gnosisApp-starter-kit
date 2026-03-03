@@ -12,8 +12,8 @@ A one-player Circles game where users pay an entry fee in CRC, then the server r
 - App generates a Gnosis transfer link + QR code for entry payment
 - Server verifies payment
 - Round is resolved with odds:
-  - win chance: `1/10`
-  - lose chance: `9/10`
+  - win chance: `1/2`
+  - lose chance: `1/2`
 - On win, server sends payout from org avatar
 
 ## Feature Summary
