@@ -4,8 +4,6 @@
 
 A one-player Circles game where users pay an entry fee in CRC, then the server resolves win/loss and sends automatic payouts on wins.
 
-![Demo](Demo1.png)
-
 ## What This App Does
 
 - Player chooses a move (`heads` or `tails`) in `/game`
